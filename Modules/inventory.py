@@ -2,8 +2,12 @@
 
 import sqlite3
 import pandas as pd
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from db_config import DB_PATH
 
-DB_NAME = "Databases/baiskeli.db"
+DB_NAME = DB_PATH
 
 def get_connection():
     return sqlite3.connect(DB_NAME)

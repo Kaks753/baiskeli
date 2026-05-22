@@ -6,10 +6,14 @@ import sqlite3
 import shutil
 import os
 import io
+import sys
 from datetime import datetime
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from db_config import DB_PATH
 
-DB_NAME = "Databases/baiskeli.db"
-BACKUP_DIR = "Backups"
+DB_NAME = DB_PATH
+# Keep Backups/ next to the database file
+BACKUP_DIR = os.path.join(os.path.dirname(DB_PATH), "..", "Backups")
 
 def get_connection():
     return sqlite3.connect(DB_NAME)

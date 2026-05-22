@@ -1,27 +1,26 @@
 # Python
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
 
-# Database
-baiskeli.db
-update_db.py
-.db
+# Database files — never commit the live DB
 Databases/
 Backups/
+*.db
 *.db-shm
 *.db-wal
 
-secrets.toml
+# Streamlit secrets (keep config.toml but not secrets)
+.streamlit/secrets.toml
 
-
-#Assets
-Assets/
-
-
-# Environment
+# Environment & local overrides
 .env
+*.env
+
+# Assets (logos etc. — add your own locally)
+Assets/
 
 # OS
 .DS_Store
 Thumbs.db
-

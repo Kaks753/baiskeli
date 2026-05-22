@@ -11,8 +11,12 @@ import sqlite3
 import bcrypt
 import time
 from datetime import datetime
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from db_config import DB_PATH
 
-DB_NAME = "Databases/baiskeli.db"
+DB_NAME = DB_PATH
 
 # In-memory brute-force protection: {username: [timestamp, ...]}
 _failed_attempts = {}

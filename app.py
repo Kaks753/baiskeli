@@ -19,9 +19,12 @@ st.set_page_config(
 )
 
 # ── DB bootstrap ─────────────────────────────────────────────
-os.makedirs("Databases", exist_ok=True)
-os.makedirs("Backups", exist_ok=True)
-os.makedirs("Assets", exist_ok=True)
+# Use absolute paths anchored to this file so the DB never gets
+# "lost" when the working directory changes between restarts.
+_BASE = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(os.path.join(_BASE, "Databases"), exist_ok=True)
+os.makedirs(os.path.join(_BASE, "Backups"),   exist_ok=True)
+os.makedirs(os.path.join(_BASE, "Assets"),    exist_ok=True)
 
 from init_db import init_db
 init_db()
