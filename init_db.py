@@ -7,21 +7,19 @@ Called once at startup from app.py.  Safe to run multiple times
 
 import sqlite3
 import os
-import bcrypt
 
-from db_config import DB_PATH
+from db_config import DB_PATH, get_connection
 
 
 def init_db():
     schema_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "schema.sql")
 
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_connection()
 
     with open(schema_path, "r") as f:
         conn.executescript(f.read())
 
     _seed_default_users(conn)
-
     conn.commit()
     conn.close()
     print(f"✅ Database ready at: {DB_PATH}")
@@ -29,6 +27,7 @@ def init_db():
 
 def _seed_default_users(conn):
     """Insert admin + cashier if they don't already exist."""
+    import bcrypt
     cursor = conn.cursor()
 
     defaults = [

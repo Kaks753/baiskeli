@@ -3,16 +3,14 @@ migration.py — Safe, additive-only schema migrations.
 
 Rules:
   • NEVER drop tables or columns here.  Only ADD.
-  • To add a future column:  append a safe_add_column() call.
-  • To add a future table:   add CREATE TABLE IF NOT EXISTS inside run_migrations().
+  • To add a future column  →  append a safe_add_column() call.
+  • To add a future table   →  add CREATE TABLE IF NOT EXISTS inside run_migrations().
 """
 
-import sqlite3
-
-from db_config import DB_PATH
+from db_config import DB_PATH, get_connection
 
 
-def safe_add_column(cursor, table, column, col_type, default=None):
+def safe_add_column(cursor, table: str, column: str, col_type: str, default=None):
     """Add a column only if it doesn't already exist.  Never raises."""
     try:
         cursor.execute(f"PRAGMA table_info({table})")
@@ -28,7 +26,7 @@ def safe_add_column(cursor, table, column, col_type, default=None):
 
 
 def run_migrations():
-    conn   = sqlite3.connect(DB_PATH)
+    conn   = get_connection()
     cursor = conn.cursor()
 
     # ── products ──────────────────────────────────────────────────

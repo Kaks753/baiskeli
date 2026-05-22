@@ -1,19 +1,11 @@
-
-
-
-import sqlite3
 import pandas as pd
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from db_config import DB_PATH
+from db_config import DB_PATH, get_connection
 
-DB_NAME = DB_PATH
 
-def get_connection():
-    return sqlite3.connect(DB_NAME)
-
-def get_date_filter(filter_type, table_alias="s"):
+def _date_filter(filter_type: str, table_alias: str = "s") -> str:
     col = f"{table_alias}.created_at"
     if filter_type == "Today":
         return f"WHERE DATE({col}) = DATE('now')"
@@ -27,37 +19,39 @@ def get_date_filter(filter_type, table_alias="s"):
         return f"WHERE strftime('%Y', {col}) = strftime('%Y', 'now')"
     return ""
 
-def get_sales_summary(filter_type="All"):
+
+def get_sales_summary(filter_type: str = "All"):
     conn = get_connection()
-    date_filter = get_date_filter(filter_type)
+    date_filter = _date_filter(filter_type)
     query = f"""
     SELECT
-        COUNT(DISTINCT s.id)                                          AS total_transactions,
-        COALESCE(SUM(si.quantity * si.price), 0)                     AS total_revenue,
-        COALESCE(SUM(si.quantity * (si.price - p.cost_price)), 0)    AS total_profit,
-        COALESCE(SUM(si.quantity), 0)                                AS total_units_sold,
-        COALESCE(SUM(s.discount), 0)                                 AS total_discounts
+        COUNT(DISTINCT s.id)                                       AS total_transactions,
+        COALESCE(SUM(si.quantity * si.price), 0)                  AS total_revenue,
+        COALESCE(SUM(si.quantity * (si.price - p.cost_price)), 0) AS total_profit,
+        COALESCE(SUM(si.quantity), 0)                             AS total_units_sold,
+        COALESCE(SUM(s.discount), 0)                              AS total_discounts
     FROM sales s
     JOIN sale_items si ON s.id = si.sale_id
-    JOIN products p ON si.product_id = p.id
+    JOIN products   p  ON si.product_id = p.id
     {date_filter}
     """
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df.iloc[0]
 
-def get_daily_sales(filter_type="All"):
+
+def get_daily_sales(filter_type: str = "All"):
     conn = get_connection()
-    date_filter = get_date_filter(filter_type)
+    date_filter = _date_filter(filter_type)
     query = f"""
     SELECT
-        DATE(s.created_at) AS date,
-        COALESCE(SUM(si.quantity * si.price), 0) AS revenue,
+        DATE(s.created_at)                                         AS date,
+        COALESCE(SUM(si.quantity * si.price), 0)                  AS revenue,
         COALESCE(SUM(si.quantity * (si.price - p.cost_price)), 0) AS profit,
-        COUNT(DISTINCT s.id) AS transactions
+        COUNT(DISTINCT s.id)                                       AS transactions
     FROM sales s
     JOIN sale_items si ON s.id = si.sale_id
-    JOIN products p ON si.product_id = p.id
+    JOIN products   p  ON si.product_id = p.id
     {date_filter}
     GROUP BY DATE(s.created_at)
     ORDER BY date
@@ -66,16 +60,17 @@ def get_daily_sales(filter_type="All"):
     conn.close()
     return df
 
+
 def get_monthly_sales():
     conn = get_connection()
     query = """
     SELECT
-        strftime('%Y-%m', s.created_at) AS month,
-        COALESCE(SUM(si.quantity * si.price), 0) AS revenue,
+        strftime('%Y-%m', s.created_at)                            AS month,
+        COALESCE(SUM(si.quantity * si.price), 0)                  AS revenue,
         COALESCE(SUM(si.quantity * (si.price - p.cost_price)), 0) AS profit
     FROM sales s
     JOIN sale_items si ON s.id = si.sale_id
-    JOIN products p ON si.product_id = p.id
+    JOIN products   p  ON si.product_id = p.id
     GROUP BY strftime('%Y-%m', s.created_at)
     ORDER BY month DESC LIMIT 12
     """
@@ -83,19 +78,20 @@ def get_monthly_sales():
     conn.close()
     return df
 
-def get_top_products(filter_type="All", limit=10):
+
+def get_top_products(filter_type: str = "All", limit: int = 10):
     conn = get_connection()
-    date_filter = get_date_filter(filter_type)
+    date_filter = _date_filter(filter_type)
     query = f"""
     SELECT
         p.name,
         p.category,
-        SUM(si.quantity)                                         AS total_sold,
-        COALESCE(SUM(si.quantity * si.price), 0)                AS revenue,
-        COALESCE(SUM(si.quantity * (si.price - p.cost_price)),0) AS profit
+        SUM(si.quantity)                                           AS total_sold,
+        COALESCE(SUM(si.quantity * si.price), 0)                  AS revenue,
+        COALESCE(SUM(si.quantity * (si.price - p.cost_price)), 0) AS profit
     FROM sales s
     JOIN sale_items si ON s.id = si.sale_id
-    JOIN products p ON si.product_id = p.id
+    JOIN products   p  ON si.product_id = p.id
     {date_filter}
     GROUP BY p.name, p.category
     ORDER BY total_sold DESC
@@ -105,17 +101,18 @@ def get_top_products(filter_type="All", limit=10):
     conn.close()
     return df
 
-def get_category_breakdown(filter_type="All"):
+
+def get_category_breakdown(filter_type: str = "All"):
     conn = get_connection()
-    date_filter = get_date_filter(filter_type)
+    date_filter = _date_filter(filter_type)
     query = f"""
     SELECT
         p.category,
         COALESCE(SUM(si.quantity * si.price), 0) AS revenue,
-        COUNT(DISTINCT s.id) AS transactions
+        COUNT(DISTINCT s.id)                      AS transactions
     FROM sales s
     JOIN sale_items si ON s.id = si.sale_id
-    JOIN products p ON si.product_id = p.id
+    JOIN products   p  ON si.product_id = p.id
     {date_filter}
     GROUP BY p.category
     ORDER BY revenue DESC
@@ -124,13 +121,14 @@ def get_category_breakdown(filter_type="All"):
     conn.close()
     return df
 
-def get_payment_breakdown(filter_type="All"):
+
+def get_payment_breakdown(filter_type: str = "All"):
     conn = get_connection()
-    date_filter = get_date_filter(filter_type)
+    date_filter = _date_filter(filter_type)
     query = f"""
     SELECT
         s.payment_method,
-        COUNT(*) AS count,
+        COUNT(*)                          AS count,
         COALESCE(SUM(s.total_amount), 0) AS total
     FROM sales s
     {date_filter}
@@ -140,7 +138,8 @@ def get_payment_breakdown(filter_type="All"):
     conn.close()
     return df
 
-def get_repairs_summary(filter_type="All"):
+
+def get_repairs_summary(filter_type: str = "All"):
     try:
         conn = get_connection()
         if filter_type == "Today":
@@ -154,19 +153,19 @@ def get_repairs_summary(filter_type="All"):
         query = f"""
         SELECT
             COUNT(*) AS total_repairs,
-            SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pending,
+            SUM(CASE WHEN status='pending'   THEN 1 ELSE 0 END) AS pending,
             SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS completed,
-            SUM(CASE WHEN status='paid' THEN 1 ELSE 0 END) AS paid
+            SUM(CASE WHEN status='paid'      THEN 1 ELSE 0 END) AS paid
         FROM repairs {wh}
         """
         df = pd.read_sql_query(query, conn)
         conn.close()
         return df.iloc[0]
     except Exception:
-        import pandas as pd
         return pd.Series({"total_repairs": 0, "pending": 0, "completed": 0, "paid": 0})
 
-def get_parking_revenue(filter_type="All"):
+
+def get_parking_revenue(filter_type: str = "All"):
     try:
         conn = get_connection()
         if filter_type == "Today":
@@ -177,20 +176,22 @@ def get_parking_revenue(filter_type="All"):
             wh = "WHERE strftime('%Y-%m', end_time) = strftime('%Y-%m','now')"
         else:
             wh = "WHERE end_time IS NOT NULL"
-        query = f"SELECT COUNT(*) AS sessions, COALESCE(SUM(fee), 0) AS revenue FROM parking {wh}"
+        query = f"""
+        SELECT COUNT(*) AS sessions, COALESCE(SUM(fee), 0) AS revenue
+        FROM parking {wh}
+        """
         df = pd.read_sql_query(query, conn)
         conn.close()
         return df.iloc[0]
     except Exception:
-        import pandas as pd
         return pd.Series({"sessions": 0, "revenue": 0})
-    
-    
+
+
 def get_full_sales_history():
     conn = get_connection()
-    df = pd.read_sql_query("""
+    df   = pd.read_sql_query("""
     SELECT
-        s.id AS sale_id,
+        s.id           AS sale_id,
         s.created_at,
         s.customer_name,
         s.total_amount,
@@ -204,4 +205,3 @@ def get_full_sales_history():
     """, conn)
     conn.close()
     return df
-

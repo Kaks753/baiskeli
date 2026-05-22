@@ -1,5 +1,3 @@
-
-
 """
 app.py — Baiskeli Centre POS System
 Run with: streamlit run app.py
@@ -7,7 +5,6 @@ Run with: streamlit run app.py
 import streamlit as st
 import pandas as pd
 import os
-import sqlite3
 from datetime import datetime
 
 # ── Page config (MUST be first Streamlit call) ───────────────
@@ -18,14 +15,18 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── DB bootstrap ─────────────────────────────────────────────
-# Use absolute paths anchored to this file so the DB never gets
-# "lost" when the working directory changes between restarts.
+# ── Resolve base directory from this file's location ────────
+# This way it doesn't matter what the current working directory
+# is — Assets, Databases and Backups are always found correctly.
 _BASE = os.path.dirname(os.path.abspath(__file__))
+LOGO_PATH = os.path.join(_BASE, "Assets", "logo.png")
+
 os.makedirs(os.path.join(_BASE, "Databases"), exist_ok=True)
 os.makedirs(os.path.join(_BASE, "Backups"),   exist_ok=True)
 os.makedirs(os.path.join(_BASE, "Assets"),    exist_ok=True)
 
+# ── DB bootstrap ─────────────────────────────────────────────
+from db_config import DB_PATH
 from init_db import init_db
 init_db()
 
@@ -90,8 +91,8 @@ def double_confirm(key, label, danger_label, action_fn, danger=True):
 def login_screen():
     col_l, col_c, col_r = st.columns([1, 2, 1])
     with col_c:
-        if os.path.exists("Assets/logo.png"):
-            st.image("Assets/logo.png", width=160)
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width=160)
         st.markdown("## 🔐 Baiskeli Centre POS")
         st.markdown("---")
 
@@ -125,8 +126,20 @@ def login_screen():
 # ─────────────────────────────────────────────────────────────
 def render_sidebar():
     with st.sidebar:
-        if os.path.exists("Assets/logo.png"):
-            st.image("Assets/logo.png", width=100)
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width=100)
+
+        # ── Persistence warning on ephemeral platforms ────────
+        using_default_path = ("BAISKELI_DB_PATH" not in os.environ)
+        on_streamlit_cloud  = os.environ.get("STREAMLIT_SHARING_MODE") == "true" or \
+                              os.environ.get("HOME", "") == "/home/appuser"
+        if using_default_path and on_streamlit_cloud:
+            st.warning(
+                "⚠️ **Data may not persist** on Streamlit Cloud because it has "
+                "no persistent disk. Deploy on Railway or Render and set "
+                "`BAISKELI_DB_PATH` to a mounted volume path to keep your data safe.",
+                icon="⚠️"
+            )
         st.markdown("### 🚴 Baiskeli Centre")
         st.markdown("---")
 

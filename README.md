@@ -1,46 +1,89 @@
 # 🚴 Baiskeli Centre POS System
 
-## Setup Instructions
+A full Point-of-Sale and inventory management system for a bicycle shop.
+Built with Python + Streamlit + SQLite.
 
-### 1. Prerequisites
-- Python 3.9 or newer
-- pip
+---
 
-### 2. Install Dependencies
+## ⚠️ Important: Where to deploy (read this first)
+
+**Do NOT use Streamlit Cloud if you need data to survive restarts.**
+Streamlit Cloud has no persistent disk — your database will vanish every time
+the container restarts (which happens after inactivity or a new deploy).
+
+**Use Railway or Render instead** — both have free tiers and give you a
+persistent disk.  See **[DEPLOY.md](DEPLOY.md)** for step-by-step instructions.
+
+---
+
+## Features
+
+- 🛒 **Point of Sale** — cart, discount, change calculation, M-Pesa/Cash/Card
+- 📦 **Inventory** — add products, restock, low-stock alerts, full audit log
+- 🔧 **Repairs** — job tracking, parts used, service cost, PDF receipt
+- 🅿️ **Parking** — hourly billing, active bay view, history
+- 📊 **Analytics** — revenue, profit, top products, payment breakdown
+- 👥 **Multi-user** — admin vs cashier roles, bcrypt passwords, login rate-limiting
+- 💾 **Backup** — one-click DB backup + Excel export of all tables
+
+---
+
+## Quick start (local)
+
 ```bash
 pip install -r requirements.txt
+streamlit run app.py
 ```
 
-### 3. Folder Structure Required
+Opens at http://localhost:8501
+
+### Default login credentials
+
+| Role    | Username | Password    |
+|---------|----------|-------------|
+| Admin   | admin    | admin2026   |
+| Cashier | cashier  | cashier2026 |
+
+⚠️ Change these immediately after first login via **Admin Tools → Change Password**.
+
+---
+
+## Folder structure
+
 ```
 BaiskeliPOS/
-├── app.py
-├── init_db.py
-├── migration.py
-├── schema.sql
+├── app.py              ← main Streamlit app
+├── db_config.py        ← single source of truth for DB path + connection
+├── init_db.py          ← creates tables, seeds default users
+├── migration.py        ← safe additive-only schema migrations
+├── schema.sql          ← table definitions
+├── DEPLOY.md           ← deployment guide (Railway / Render / local)
 ├── requirements.txt
 ├── Modules/
-│   ├── __init__.py
-│   ├── auth.py
-│   ├── analytics.py
-│   ├── inventory.py
-│   ├── pos.py
-│   ├── receipt.py
-│   ├── repairs.py
-│   ├── parking.py
-│   └── backup.py
-├── Assets/
-│   └── logo.png        ← Place your shop logo here
-├── Databases/          ← Auto-created
-└── Backups/            ← Auto-created
+│   ├── auth.py         ← login, users, audit logging
+│   ├── analytics.py    ← sales summaries and charts
+│   ├── inventory.py    ← products, stock management
+│   ├── pos.py          ← checkout / sale processing
+│   ├── receipt.py      ← PDF receipt generation
+│   ├── repairs.py      ← repair job management
+│   ├── parking.py      ← bike parking
+│   └── backup.py       ← DB backup + Excel export
+├── Assets/             ← place logo.png here
+├── Databases/          ← auto-created, holds baiskeli.db
+└── Backups/            ← auto-created, backup files land here
 ```
 
-### 4. Add Your Logo
-Place your shop logo at `Assets/logo.png`.
-Recommended size: 300×200 pixels, PNG format.
+---
 
-### 5. Customise Shop Details
-Edit these lines in `Modules/receipt.py`:
+## Adding your logo
+
+Place a PNG at `Assets/logo.png` (recommended 300×200 px).
+
+---
+
+## Customising shop details
+
+Edit these in `Modules/receipt.py`:
 ```python
 SHOP_NAME    = "Baiskeli Centre"
 SHOP_ADDRESS = "Nairobi CBD, Kenya"
@@ -48,63 +91,54 @@ SHOP_PHONE   = "0712 345 678"
 SHOP_EMAIL   = "info@baiskelicentre.co.ke"
 ```
 
-### 6. Run the App
+---
+
+## Database: how persistence works
+
+The DB path is resolved in `db_config.py`:
+
+1. If the environment variable `BAISKELI_DB_PATH` is set → use that path.
+   Set this to a **persistent volume path** on Railway/Render so data survives restarts.
+2. Otherwise → defaults to `<repo-root>/Databases/baiskeli.db` (absolute path,
+   works perfectly for local / self-hosted installs).
+
 ```bash
-streamlit run app.py
+# Railway / Render: set this in your environment variables
+BAISKELI_DB_PATH=/data/baiskeli.db
 ```
 
-The app opens in your browser at http://localhost:8501
-
 ---
 
-## Default Credentials
-| Role    | Username | Password      |
-|---------|----------|---------------|
-| Admin   | admin    | admin2026     |
-| Cashier | cashier  | cashier2026   |
+## Adding new tables or columns (future-proofing)
 
-⚠️ **Change default passwords immediately after first login!**
-
----
-
-## Adding New Database Tables/Columns (Future-Proofing)
-
-### Adding a New Column to an Existing Table
+### New column on an existing table
 In `migration.py`, add:
 ```python
 safe_add_column(cursor, "products", "your_new_column", "TEXT", "''")
 ```
-This is **safe** — it only adds if the column doesn't already exist.
+Safe to run multiple times — only adds if the column doesn't exist.
 
-### Adding a Brand New Table
-In `schema.sql`, add a new `CREATE TABLE IF NOT EXISTS` block.
-Then run the app — it will apply automatically on next startup.
+### Brand new table
+Add a `CREATE TABLE IF NOT EXISTS` block in `schema.sql`.
+It applies automatically on the next startup.
 
-**NEVER** drop existing tables or columns in migration.py.
+**NEVER** drop existing tables or columns in `migration.py`.
 
 ---
 
-## Security Notes
-- Bcrypt password hashing
-- Login rate-limiting: 5 failed attempts = 5-minute lockout  
-- All admin actions are logged in `audit_logs` table
-- Cashiers cannot see cost prices
-- Only admins can export data, delete sales/products
-- Double confirmation required for all deletions
+## Security notes
+
+- Passwords hashed with bcrypt (never stored plain)
+- Login rate-limiting: 5 failed attempts = 5-minute lockout
+- All admin actions logged in `audit_logs` table
+- Cashiers cannot see cost prices or access admin tools
+- Double confirmation required before any deletion
 
 ---
 
 ## Backup & Export
-- **Admin Tools → Backup & Export** to create DB backups
-- Backups stored in `Backups/` folder
-- Excel export of all tables available
-- Only admins can access these features
 
----
-
-## Discount & Checkout
-At checkout, staff can:
-1. Enter a discount amount (KES)
-2. Enter the actual amount the customer paid
-3. System shows change to give back
-4. All discounts are recorded for analytics
+**Admin Tools → Backup & Export**
+- Creates a timestamped `.db` copy in `Backups/`
+- Excel export of all tables available for download
+- Download and store backups off-server regularly
