@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.pyc
+
+# Database
+baiskeli.db
+update_db.py
+.db
+Databases/
+Backups/
+*.db-shm
+*.db-wal
+
+secrets.toml
+
+
+#Assets
+Assets/
+
+
+# Environment
+.env
+
+# OS
+.DS_Store
+Thumbs.db
+
