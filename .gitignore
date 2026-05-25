@@ -1,12 +1,14 @@
-# Python
+# Python cache
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
 
-# Database files — never commit the live DB
-Databases/
-Backups/
+# Database files — never commit the live DB, only the placeholder
+Databases/*
+!Databases/.gitkeep
+Backups/*
+!Backups/.gitkeep
 *.db
 *.db-shm
 *.db-wal
@@ -18,8 +20,9 @@ Backups/
 .env
 *.env
 
-# Assets (logos etc. — add your own locally)
-Assets/
+# Assets (logos etc.) — keep placeholder, ignore actual images
+Assets/*
+!Assets/.gitkeep
 
 # OS
 .DS_Store

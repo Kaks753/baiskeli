@@ -1,0 +1,30 @@
+# render.yaml — Render deployment configuration
+# This is the "Infrastructure as Code" file for Render.
+# Render reads this automatically when you connect your repo.
+#
+# IMPORTANT ABOUT RENDER FREE TIER + PERSISTENT DISK:
+# Render's free web service tier does NOT include a persistent disk.
+# Persistent disks are a paid add-on ($0.25/GB/month, minimum ~$1/month).
+# You need to upgrade to at least the "Starter" paid plan to attach a disk.
+#
+# If you want 100% free on Render: your data WILL be lost on restarts.
+# For a real shop: pay the $1/month disk OR use Railway (cheaper overall).
+
+services:
+  - type: web
+    name: baiskeli-pos
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
+    envVars:
+      - key: BAISKELI_DB_PATH
+        value: /data/baiskeli.db   # points to persistent disk mount
+      - key: PYTHON_VERSION
+        value: "3.12"
+
+    # Persistent disk — attach so data survives restarts
+    # This requires a paid instance type (Starter or above)
+    disk:
+      name: baiskeli-data
+      mountPath: /data
+      sizeGB: 1      # 1 GB = $0.25/month, plenty for SQLite
