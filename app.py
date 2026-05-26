@@ -5,6 +5,7 @@ Run with: streamlit run app.py
 import streamlit as st
 import pandas as pd
 import os
+import json
 from datetime import datetime
 
 # ── Page config (MUST be first Streamlit call) ───────────────
@@ -15,23 +16,93 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# ── Resolve base directory from this file's location ────────
-# This way it doesn't matter what the current working directory
-# is — Assets, Databases and Backups are always found correctly.
-_BASE = os.path.dirname(os.path.abspath(__file__))
+# ── Resolve base directory from this file's location ─────────
+# Absolute paths so the app works regardless of where it is launched.
+_BASE     = os.path.dirname(os.path.abspath(__file__))
 LOGO_PATH = os.path.join(_BASE, "Assets", "logo.png")
 
 os.makedirs(os.path.join(_BASE, "Databases"), exist_ok=True)
 os.makedirs(os.path.join(_BASE, "Backups"),   exist_ok=True)
 os.makedirs(os.path.join(_BASE, "Assets"),    exist_ok=True)
 
-# ── DB bootstrap ─────────────────────────────────────────────
-from db_config import DB_PATH
+# ── DB bootstrap ──────────────────────────────────────────────
+from db_config import USE_POSTGRES
 from init_db import init_db
 init_db()
 
 from migration import run_migrations
 run_migrations()
+
+# ── Cookie-based session persistence ─────────────────────────
+# PROBLEM: Streamlit session_state lives in memory for one browser tab.
+# Refreshing the page = blank session = user gets logged out immediately.
+# That is how Streamlit works by design — cannot be fixed inside session_state.
+#
+# FIX: Store the logged-in user in an encrypted browser cookie.
+# On every page load (including refresh) we read that cookie first and
+# restore the session BEFORE rendering anything. On logout, wipe cookie.
+#
+# If the library is missing or fails for any reason COOKIES_OK = False
+# and the app falls back gracefully (login persists within a tab only).
+try:
+    from streamlit_cookies_manager import EncryptedCookieManager
+    # COOKIE_SECRET is set as an env var on Render (render.yaml sets
+    # generateValue: true so Render creates a random secret automatically).
+    # Locally defaults to a placeholder — fine for development.
+    _COOKIE_KEY = os.environ.get("COOKIE_SECRET", "baiskeli-secret-change-me-2026")
+    cookies     = EncryptedCookieManager(prefix="baiskeli_", password=_COOKIE_KEY)
+    if not cookies.ready():
+        st.stop()    # pause until the JS cookie bridge initialises in the browser
+    COOKIES_OK = True
+except Exception:
+    cookies    = None
+    COOKIES_OK = False
+
+
+def _restore_session_from_cookie():
+    """
+    Called on every page load BEFORE any rendering.
+    If no user in session_state but a valid cookie exists → restore it.
+    This is what keeps staff logged in across F5 / page refresh.
+    """
+    if st.session_state.get("user"):
+        return                          # already logged in for this tab
+    if not COOKIES_OK or cookies is None:
+        return
+    try:
+        raw = cookies.get("session_user")
+        if raw:
+            user = json.loads(raw)
+            if isinstance(user, dict) and "username" in user and "role" in user:
+                st.session_state["user"] = user
+    except Exception:
+        pass
+
+
+def _save_session_to_cookie(user: dict):
+    """Write the logged-in user dict to the browser cookie on successful login."""
+    if not COOKIES_OK or cookies is None:
+        return
+    try:
+        cookies["session_user"] = json.dumps(user)
+        cookies.save()
+    except Exception:
+        pass
+
+
+def _clear_session_cookie():
+    """Wipe the session cookie when the user explicitly logs out."""
+    if not COOKIES_OK or cookies is None:
+        return
+    try:
+        cookies["session_user"] = ""
+        cookies.save()
+    except Exception:
+        pass
+
+
+# Restore login from cookie BEFORE anything else renders
+_restore_session_from_cookie()
 
 # ── Module imports ────────────────────────────────────────────
 from Modules.auth import (login, create_user, get_all_users,
@@ -77,7 +148,6 @@ def current_user():
 def double_confirm(key, label, danger_label, action_fn, danger=True):
     """Two-step confirmation widget. Returns True if action was executed."""
     confirm_key = f"confirm_{key}"
-    btn_class = "danger" if danger else "primary"
     if st.checkbox(f"✅ Confirm: {label}", key=confirm_key):
         if st.button(f"🗑️ {danger_label}", key=f"btn_{key}", type="primary"):
             action_fn()
@@ -107,6 +177,7 @@ def login_screen():
                 user = login(username, password)
                 if user:
                     st.session_state.user = user
+                    _save_session_to_cookie(user)   # ← keeps login across refresh
                     st.success(f"Welcome, {username}!")
                     st.rerun()
                 else:
@@ -129,17 +200,16 @@ def render_sidebar():
         if os.path.exists(LOGO_PATH):
             st.image(LOGO_PATH, width=100)
 
-        # ── Persistence warning on ephemeral platforms ────────
-        using_default_path = ("BAISKELI_DB_PATH" not in os.environ)
-        on_streamlit_cloud  = os.environ.get("STREAMLIT_SHARING_MODE") == "true" or \
-                              os.environ.get("HOME", "") == "/home/appuser"
-        if using_default_path and on_streamlit_cloud:
-            st.warning(
-                "⚠️ **Data may not persist** on Streamlit Cloud because it has "
-                "no persistent disk. Deploy on Railway or Render and set "
-                "`BAISKELI_DB_PATH` to a mounted volume path to keep your data safe.",
-                icon="⚠️"
+        # ── Warn if on Render but Postgres not yet connected ──
+        on_render    = os.environ.get("RENDER") == "true"
+        has_postgres = USE_POSTGRES
+        if on_render and not has_postgres:
+            st.error(
+                "⚠️ **DATABASE_URL not set!**  \n"
+                "Data will be lost on restart.  \n"
+                "Add your free Postgres URL in Render → Environment."
             )
+
         st.markdown("### 🚴 Baiskeli Centre")
         st.markdown("---")
 
@@ -150,6 +220,7 @@ def render_sidebar():
 
             if st.button("🚪 Log Out", use_container_width=True):
                 log_action(u["username"], "LOGOUT")
+                _clear_session_cookie()              # ← wipe the cookie
                 for key in list(st.session_state.keys()):
                     del st.session_state[key]
                 st.rerun()
@@ -157,6 +228,10 @@ def render_sidebar():
         st.markdown("---")
         st.caption("Baiskeli Centre POS v2.0")
         st.caption(f"🕐 {datetime.now().strftime('%d %b %Y %H:%M')}")
+        if USE_POSTGRES:
+            st.caption("🐘 PostgreSQL")
+        else:
+            st.caption("🗄️ SQLite (local)")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -291,7 +366,6 @@ def inventory_screen():
         if low_only:
             df = df[df["Stock"] <= df["Reorder Level"]]
 
-        # Hide cost price from cashier
         display_df = df.copy()
         if not is_admin():
             display_df = display_df.drop(columns=["Cost Price"])
@@ -355,8 +429,6 @@ def inventory_screen():
                         log_action(current_user(), "DELETE_PRODUCT", f"id={p['ID']} name={p['Name']}")
                         st.success("Product deleted.")
                         st.rerun()
-
- 
 
     with tab_add:
         if not is_admin():
@@ -422,7 +494,6 @@ def pos_screen():
         for _, r in df.iterrows()
     }
 
-    # ── Add to cart ────────────────────────────────────────
     col1, col2, col3 = st.columns([4, 1, 1])
     selected = col1.selectbox("Product", list(product_dict.keys()))
     qty = col2.number_input("Qty", min_value=1, value=1, step=1)
@@ -444,7 +515,6 @@ def pos_screen():
         st.success(f"Added {product['name']}")
         st.rerun()
 
-    # ── Cart display ───────────────────────────────────────
     st.markdown("---")
     st.subheader("🛒 Cart")
 
@@ -472,34 +542,26 @@ def pos_screen():
                 st.rerun()
 
         st.markdown("---")
-
-        # ── Checkout form ──────────────────────────────────
         st.subheader("🧾 Complete Sale")
         cf1, cf2 = st.columns(2)
-        customer_name  = cf1.text_input("Customer Name", placeholder="Walk-in",
-                                        key="pos_customer")
-        payment_method = cf2.selectbox("Payment Method", ["Cash","M-Pesa","Paybill","Card"],
-                                       key="pos_payment")
+        customer_name  = cf1.text_input("Customer Name", placeholder="Walk-in", key="pos_customer")
+        payment_method = cf2.selectbox("Payment Method", ["Cash","M-Pesa","Paybill","Card"], key="pos_payment")
 
         df1, df2 = st.columns(2)
-        discount   = df1.number_input("Discount (KES)", min_value=0.0, value=0.0,
-                                      step=50.0, key="pos_discount")
+        discount    = df1.number_input("Discount (KES)", min_value=0.0, value=0.0, step=50.0, key="pos_discount")
         amount_paid = df2.number_input(
             "Amount Paid by Customer (KES)",
-            min_value=0.0,
-            value=float(subtotal - discount),
-            step=50.0,
-            key="pos_amount_paid",
-            help="Enter actual cash/M-Pesa received"
+            min_value=0.0, value=float(subtotal - discount), step=50.0,
+            key="pos_amount_paid", help="Enter actual cash/M-Pesa received"
         )
 
         final_total = max(0, subtotal - discount)
         change      = amount_paid - final_total
 
         tot1, tot2, tot3 = st.columns(3)
-        tot1.metric("Subtotal",   f"KES {subtotal:,.2f}")
-        tot2.metric("Discount",   f"KES {discount:,.2f}")
-        tot3.metric("TOTAL",      f"KES {final_total:,.2f}")
+        tot1.metric("Subtotal",  f"KES {subtotal:,.2f}")
+        tot2.metric("Discount",  f"KES {discount:,.2f}")
+        tot3.metric("TOTAL",     f"KES {final_total:,.2f}")
 
         if change >= 0:
             st.info(f"💵 Change to give customer: **KES {change:,.2f}**")
@@ -511,16 +573,13 @@ def pos_screen():
                 cart_items = [{"product_id": i["product_id"], "quantity": i["quantity"]}
                               for i in st.session_state.cart]
                 cname = customer_name.strip() or "Walk-in"
-                sale_id, total, items = process_sale(
-                    cart_items, payment_method, cname, discount, amount_paid
-                )
+                sale_id, total, items = process_sale(cart_items, payment_method, cname, discount, amount_paid)
                 pdf = generate_pdf_receipt(
                     sale_id, items, total, cname, payment_method,
                     discount=discount, amount_paid=amount_paid
                 )
                 st.session_state.last_receipt = {
-                    "pdf": pdf,
-                    "sale_id": sale_id,
+                    "pdf": pdf, "sale_id": sale_id,
                     "filename": f"receipt_{sale_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
                 }
                 log_action(current_user(), "SALE", f"sale_id={sale_id} total={total}")
@@ -530,15 +589,13 @@ def pos_screen():
             except Exception as e:
                 st.error(str(e))
 
-    # ── Receipt download ──────────────────────────────────
     if st.session_state.last_receipt:
         st.success("🧾 Receipt ready!")
         st.download_button(
             label="📄 Download Receipt (PDF)",
             data=st.session_state.last_receipt["pdf"],
             file_name=st.session_state.last_receipt["filename"],
-            mime="application/pdf",
-            use_container_width=True
+            mime="application/pdf", use_container_width=True
         )
         if st.button("🆕 New Sale"):
             st.session_state.last_receipt = None
@@ -550,19 +607,15 @@ def pos_screen():
 # ─────────────────────────────────────────────────────────────
 def sales_history_screen():
     st.markdown("## 📑 Sales History")
-
     df = get_full_sales_history()
-
     if df.empty:
         st.info("No sales recorded yet.")
         return
 
-    # Search/filter
     c1, c2 = st.columns(2)
     search = c1.text_input("🔍 Search customer")
     pay_f  = c2.selectbox("Payment Method", ["All"] +
                            sorted(df["payment_method"].dropna().unique().tolist()))
-
     if search:
         df = df[df["customer_name"].str.contains(search, case=False, na=False)]
     if pay_f != "All":
@@ -571,20 +624,16 @@ def sales_history_screen():
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.caption(f"{len(df)} sales shown | Total: KES {df['total_amount'].sum():,.2f}")
 
-    # ── Delete sale (admin only) ───────────────────────────
     if is_admin():
         st.markdown("---")
         st.markdown("### 🗑️ Delete Sale (Admin)")
         st.warning("Deleting a sale will RESTORE stock for non-service items.")
         sale_ids = df["sale_id"].tolist()
         if sale_ids:
-            del_id = st.selectbox("Select Sale ID to Delete", sale_ids,
-                                  key="del_sale_select")
-            confirmed = st.checkbox(f"I confirm deletion of Sale #{del_id}",
-                                    key=f"confirm_del_sale_{del_id}")
+            del_id = st.selectbox("Select Sale ID to Delete", sale_ids, key="del_sale_select")
+            confirmed = st.checkbox(f"I confirm deletion of Sale #{del_id}", key=f"confirm_del_sale_{del_id}")
             if confirmed:
-                confirmed2 = st.checkbox("FINAL CHECK — This cannot be undone.",
-                                         key=f"confirm2_del_sale_{del_id}")
+                confirmed2 = st.checkbox("FINAL CHECK — This cannot be undone.", key=f"confirm2_del_sale_{del_id}")
                 if confirmed2:
                     if st.button("🗑️ DELETE SALE", type="primary"):
                         delete_sale(del_id)
@@ -600,7 +649,6 @@ def repairs_screen():
     st.markdown("## 🔧 Repairs Management")
     tab_new, tab_manage = st.tabs(["➕ New Repair", "📋 Manage Repairs"])
 
-    # ── NEW REPAIR ─────────────────────────────────────────
     with tab_new:
         with st.form("new_repair_form"):
             c1, c2 = st.columns(2)
@@ -621,68 +669,54 @@ def repairs_screen():
                 else:
                     st.error("Customer name and phone are required.")
 
-        # Parts for current repair
         if st.session_state.current_repair:
             rid = st.session_state.current_repair
             st.markdown(f"### 🧩 Add Parts — Repair #{rid}")
-
             df_prod = get_all_products()
             part_map = {f"{r['Name']} (Stock:{r['Stock']})": r["ID"]
                         for _, r in df_prod.iterrows()}
-
             with st.form("add_part_form"):
                 pc1, pc2, pc3 = st.columns(3)
-                part_sel = pc1.selectbox("Part", list(part_map.keys()))
-                part_qty = pc2.number_input("Qty", min_value=1, value=1)
+                part_sel   = pc1.selectbox("Part", list(part_map.keys()))
+                part_qty   = pc2.number_input("Qty", min_value=1, value=1)
                 part_price = pc3.number_input("Price/Unit", min_value=0.0, format="%.2f")
-
                 if st.form_submit_button("➕ Add Part"):
                     try:
-                        pid2 = part_map[part_sel]
-                        add_repair_item(rid, pid2, part_qty, part_price)
-                        st.session_state.repair_parts.append({
-                            "name": part_sel, "qty": part_qty, "price": part_price
-                        })
+                        add_repair_item(rid, part_map[part_sel], part_qty, part_price)
+                        st.session_state.repair_parts.append(
+                            {"name": part_sel, "qty": part_qty, "price": part_price}
+                        )
                         st.success(f"Added {part_sel}")
                         st.rerun()
                     except Exception as e:
                         st.error(str(e))
 
-            # Show added parts
             if st.session_state.repair_parts:
                 st.markdown("#### Parts Added")
                 for idx, part in enumerate(st.session_state.repair_parts, 1):
                     line = part["qty"] * part["price"]
                     st.write(f"{idx}. {part['name']} × {part['qty']} @ KES {part['price']:.2f} = KES {line:.2f}")
 
-    # ── MANAGE REPAIRS ─────────────────────────────────────
     with tab_manage:
         df = get_repairs()
         if df.empty:
             st.info("No repair jobs yet.")
             return
 
-        # Filter
-        status_f = st.selectbox("Filter by Status",
-                                 ["All","pending","completed","paid"],
-                                 key="rep_status_filter")
+        status_f = st.selectbox("Filter by Status", ["All","pending","completed","paid"], key="rep_status_filter")
         if status_f != "All":
             df = df[df["status"] == status_f]
-
         st.dataframe(df, use_container_width=True, hide_index=True)
 
         repair_id = st.selectbox("Select Repair ID", df["id"].tolist(), key="rep_select")
 
-        # Status update
         col_s1, col_s2 = st.columns(2)
-        new_status = col_s1.selectbox("Update Status", ["pending","completed","paid"],
-                                       key="rep_new_status")
+        new_status = col_s1.selectbox("Update Status", ["pending","completed","paid"], key="rep_new_status")
         if col_s2.button("✅ Update Status"):
             update_repair_status(repair_id, new_status)
             st.success("Status updated!")
             st.rerun()
 
-        # Existing parts
         existing_parts = get_repair_items(repair_id)
         service_cost   = get_repair_service_cost(repair_id)
         total_parts    = sum(float(p["qty"]) * float(p["price"]) for p in existing_parts)
@@ -696,15 +730,13 @@ def repairs_screen():
             for idx, p in enumerate(existing_parts, 1):
                 st.write(f"{idx}. {p['name']} × {p['qty']} @ KES {p['price']:.2f}")
 
-        # Add more parts
         with st.expander("➕ Add More Parts"):
             df_p = get_all_products()
-            pm2 = {f"{r['Name']} (Stock:{r['Stock']})": r["ID"]
-                   for _, r in df_p.iterrows()}
+            pm2 = {f"{r['Name']} (Stock:{r['Stock']})": r["ID"] for _, r in df_p.iterrows()}
             with st.form("add_more_parts"):
                 am1, am2, am3 = st.columns(3)
-                am_sel = am1.selectbox("Part", list(pm2.keys()))
-                am_qty = am2.number_input("Qty", min_value=1)
+                am_sel   = am1.selectbox("Part", list(pm2.keys()))
+                am_qty   = am2.number_input("Qty", min_value=1)
                 am_price = am3.number_input("Price/Unit", min_value=0.0, format="%.2f")
                 if st.form_submit_button("Add Part"):
                     try:
@@ -714,31 +746,22 @@ def repairs_screen():
                     except Exception as e:
                         st.error(str(e))
 
-        # Checkout
         st.markdown("---")
         st.markdown("### 💳 Checkout Repair")
         rep_info = get_repair_details(repair_id)
 
-        # Re-fetch totals after any additions
         existing_parts = get_repair_items(repair_id)
         service_cost   = get_repair_service_cost(repair_id)
         total_parts    = sum(float(p["qty"]) * float(p["price"]) for p in existing_parts)
         full_total     = total_parts + service_cost
 
         co1, co2 = st.columns(2)
-        rep_customer = co1.text_input("Customer Name",
-                                       value=rep_info.get("customer_name",""),
-                                       key=f"rep_cust_{repair_id}")
-        rep_payment  = co2.selectbox("Payment Method",
-                                      ["Cash","M-Pesa","Paybill","Card"],
-                                      key=f"rep_pay_{repair_id}")
+        rep_customer = co1.text_input("Customer Name", value=rep_info.get("customer_name",""), key=f"rep_cust_{repair_id}")
+        rep_payment  = co2.selectbox("Payment Method", ["Cash","M-Pesa","Paybill","Card"], key=f"rep_pay_{repair_id}")
         co3, co4 = st.columns(2)
-        rep_discount  = co3.number_input("Discount (KES)", min_value=0.0,
-                                          key=f"rep_disc_{repair_id}")
-        rep_amt_paid  = co4.number_input("Amount Paid",
-                                          value=float(max(0, full_total - rep_discount)),
-                                          min_value=0.0,
-                                          key=f"rep_paid_{repair_id}")
+        rep_discount = co3.number_input("Discount (KES)", min_value=0.0, key=f"rep_disc_{repair_id}")
+        rep_amt_paid = co4.number_input("Amount Paid", value=float(max(0, full_total - rep_discount)),
+                                         min_value=0.0, key=f"rep_paid_{repair_id}")
 
         final_repair_total = max(0, full_total - rep_discount)
         rep_change = rep_amt_paid - final_repair_total
@@ -752,31 +775,18 @@ def repairs_screen():
             try:
                 record_repair_sale(repair_id, rep_payment, rep_discount, rep_amt_paid)
                 update_repair_status(repair_id, "paid")
-                log_action(current_user(), "REPAIR_CHECKOUT",
-                           f"repair_id={repair_id} total={final_repair_total}")
-
+                log_action(current_user(), "REPAIR_CHECKOUT", f"repair_id={repair_id} total={final_repair_total}")
                 parts = get_repair_items(repair_id)
-                items_for_receipt = [
-                    {"name": p["name"], "quantity": p["qty"], "price": p["price"]}
-                    for p in parts
-                ]
-                items_for_receipt.append(
-                    {"name": "── Service Fee ──", "quantity": 1, "price": service_cost}
-                )
+                items_for_receipt = [{"name": p["name"], "quantity": p["qty"], "price": p["price"]} for p in parts]
+                items_for_receipt.append({"name": "── Service Fee ──", "quantity": 1, "price": service_cost})
                 details = get_repair_details(repair_id)
                 pdf = generate_pdf_receipt(
                     repair_id, items_for_receipt, final_repair_total,
                     rep_customer or "Walk-in", rep_payment,
                     discount=rep_discount, amount_paid=rep_amt_paid,
-                    repair_info={
-                        "bike": details.get("bike_type",""),
-                        "issue": details.get("issue",""),
-                        "phone": details.get("phone","")
-                    }
+                    repair_info={"bike": details.get("bike_type",""), "issue": details.get("issue",""), "phone": details.get("phone","")}
                 )
-                st.session_state.last_repair_receipt = {
-                    "pdf": pdf, "repair_id": repair_id
-                }
+                st.session_state.last_repair_receipt = {"pdf": pdf, "repair_id": repair_id}
                 st.success("✅ Repair checked out!")
                 st.rerun()
             except Exception as e:
@@ -788,19 +798,15 @@ def repairs_screen():
                 "📄 Download Repair Receipt",
                 data=st.session_state.last_repair_receipt["pdf"],
                 file_name=f"repair_receipt_{repair_id}.pdf",
-                mime="application/pdf",
-                use_container_width=True
+                mime="application/pdf", use_container_width=True
             )
 
-        # Delete repair (admin)
         if is_admin():
             st.markdown("---")
             st.markdown("### 🗑️ Delete Repair")
-            d1 = st.checkbox(f"Confirm delete Repair #{repair_id}",
-                             key=f"del_rep1_{repair_id}")
+            d1 = st.checkbox(f"Confirm delete Repair #{repair_id}", key=f"del_rep1_{repair_id}")
             if d1:
-                d2 = st.checkbox("FINAL CHECK — cannot be undone",
-                                 key=f"del_rep2_{repair_id}")
+                d2 = st.checkbox("FINAL CHECK — cannot be undone", key=f"del_rep2_{repair_id}")
                 if d2 and st.button("🗑️ DELETE REPAIR", type="primary"):
                     delete_repair(repair_id)
                     log_action(current_user(), "DELETE_REPAIR", f"id={repair_id}")
@@ -818,10 +824,9 @@ def parking_screen():
     with tab_in:
         with st.form("parking_checkin"):
             c1, c2 = st.columns(2)
-            customer  = c1.text_input("Customer Name *")
-            bike_desc = c2.text_input("Bike Description (colour/model) *")
-            daily_rate = st.number_input("Daily Rate (KES)", min_value=10.0,
-                                          value=100.0, step=10.0)
+            customer   = c1.text_input("Customer Name *")
+            bike_desc  = c2.text_input("Bike Description (colour/model) *")
+            daily_rate = st.number_input("Daily Rate (KES)", min_value=10.0, value=100.0, step=10.0)
             if st.form_submit_button("✅ Check In", type="primary"):
                 if customer and bike_desc:
                     pid = check_in(customer, bike_desc, daily_rate)
@@ -851,8 +856,7 @@ def parking_screen():
                 pid = options[selected]
                 try:
                     fee, hours = check_out(pid)
-                    log_action(current_user(), "PARKING_CHECKOUT",
-                               f"id={pid} fee={fee} hours={hours:.1f}")
+                    log_action(current_user(), "PARKING_CHECKOUT", f"id={pid} fee={fee} hours={hours:.1f}")
                     st.success(f"✅ Checked out after **{hours:.1f} hours**")
                     st.metric("Fee Charged", f"KES {fee:,.2f}")
                 except Exception as e:
@@ -893,8 +897,7 @@ def admin_tools_screen():
                 if new_user and new_pass:
                     try:
                         create_user(new_user, new_pass, new_role)
-                        log_action(current_user(), "CREATE_USER",
-                                   f"username={new_user} role={new_role}")
+                        log_action(current_user(), "CREATE_USER", f"username={new_user} role={new_role}")
                         st.success(f"User {new_user} created!")
                     except Exception as e:
                         st.error(str(e))
@@ -916,9 +919,7 @@ def admin_tools_screen():
 
     with tab_backup:
         st.subheader("💾 Database Backup")
-        st.info("Backups are stored in the `Backups/` folder on the server. "
-                "Only admins can download the backup file.")
-
+        st.info("Backups are stored in the Backups/ folder on the server.")
         if st.button("📦 Create Backup Now", type="primary"):
             try:
                 path = backup_database()
@@ -935,10 +936,8 @@ def admin_tools_screen():
             if st.button("⬇️ Download Selected Backup"):
                 data = read_backup(selected_backup)
                 st.download_button(
-                    "📥 Click to Download DB",
-                    data=data,
-                    file_name=selected_backup,
-                    mime="application/octet-stream"
+                    "📥 Click to Download",
+                    data=data, file_name=selected_backup, mime="application/octet-stream"
                 )
 
         st.markdown("---")
@@ -967,8 +966,8 @@ def admin_tools_screen():
     with tab_pwd:
         st.subheader("🔑 Change Your Password")
         with st.form("change_pwd_form"):
-            old_pwd = st.text_input("Current Password", type="password")
-            new_pwd = st.text_input("New Password", type="password")
+            old_pwd     = st.text_input("Current Password", type="password")
+            new_pwd     = st.text_input("New Password", type="password")
             confirm_pwd = st.text_input("Confirm New Password", type="password")
             if st.form_submit_button("🔑 Change Password", type="primary"):
                 if new_pwd != confirm_pwd:
@@ -1005,7 +1004,6 @@ def cashier_screen():
     tabs = st.tabs(["💰 Checkout", "📦 Inventory", "🔧 Repairs", "🅿️ Parking"])
     with tabs[0]: pos_screen()
     with tabs[1]:
-        # Cashier sees inventory but not cost prices, cannot edit
         st.markdown("## 📦 Inventory")
         df = get_all_products()
         if "Cost Price" in df.columns:

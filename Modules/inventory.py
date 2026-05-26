@@ -1,25 +1,45 @@
+"""
+inventory.py — Product inventory management.
+Works on both SQLite and PostgreSQL.
+
+KEY CHANGES vs old version:
+  - _p = "%s" for Postgres, "?" for SQLite
+  - After INSERT, we get the new row's ID differently per backend:
+      Postgres: SELECT lastval()  (returns the last SERIAL value generated)
+      SQLite:   cursor.lastrowid  (built-in attribute)
+"""
 import pandas as pd
-import sys
-import os
+import sys, os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from db_config import DB_PATH, get_connection
+from db_config import get_connection, USE_POSTGRES
+
+_p = "%s" if USE_POSTGRES else "?"
 
 
 def add_product(name, category, subcategory, brand, size, description,
                 cost_price, selling_price, quantity):
     conn   = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(f"""
         INSERT INTO products
             (name, category, subcategory, brand, size, description,
              cost_price, selling_price, quantity_in_stock)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ({_p},{_p},{_p},{_p},{_p},{_p},{_p},{_p},{_p})
     """, (name, category, subcategory, brand, size, description,
           cost_price, selling_price, quantity))
-    product_id = cursor.lastrowid
-    cursor.execute("""
-        INSERT INTO inventory_logs (product_id, change, reason) VALUES (?, ?, ?)
-    """, (product_id, quantity, "initial stock"))
+
+    # Get the ID of the row we just inserted
+    if USE_POSTGRES:
+        cursor.execute("SELECT lastval()")
+        product_id = cursor.fetchone()[0]
+    else:
+        product_id = cursor.lastrowid
+
+    # Log the initial stock entry
+    cursor.execute(
+        f"INSERT INTO inventory_logs (product_id, change, reason) VALUES ({_p},{_p},{_p})",
+        (product_id, quantity, "initial stock")
+    )
     conn.commit()
     conn.close()
 
@@ -27,12 +47,14 @@ def add_product(name, category, subcategory, brand, size, description,
 def restock_product(product_id, quantity):
     conn   = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
-        UPDATE products SET quantity_in_stock = quantity_in_stock + ? WHERE id = ?
-    """, (quantity, product_id))
-    cursor.execute("""
-        INSERT INTO inventory_logs (product_id, change, reason) VALUES (?, ?, ?)
-    """, (product_id, quantity, "restock"))
+    cursor.execute(
+        f"UPDATE products SET quantity_in_stock = quantity_in_stock + {_p} WHERE id = {_p}",
+        (quantity, product_id)
+    )
+    cursor.execute(
+        f"INSERT INTO inventory_logs (product_id, change, reason) VALUES ({_p},{_p},{_p})",
+        (product_id, quantity, "restock")
+    )
     conn.commit()
     conn.close()
 
@@ -40,7 +62,7 @@ def restock_product(product_id, quantity):
 def reduce_stock(product_id, quantity):
     conn   = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT quantity_in_stock FROM products WHERE id = ?", (product_id,))
+    cursor.execute(f"SELECT quantity_in_stock FROM products WHERE id = {_p}", (product_id,))
     result = cursor.fetchone()
     if not result:
         conn.close()
@@ -48,12 +70,14 @@ def reduce_stock(product_id, quantity):
     if result[0] < quantity:
         conn.close()
         raise Exception("Not enough stock")
-    cursor.execute("""
-        UPDATE products SET quantity_in_stock = quantity_in_stock - ? WHERE id = ?
-    """, (quantity, product_id))
-    cursor.execute("""
-        INSERT INTO inventory_logs (product_id, change, reason) VALUES (?, ?, ?)
-    """, (product_id, -quantity, "sale"))
+    cursor.execute(
+        f"UPDATE products SET quantity_in_stock = quantity_in_stock - {_p} WHERE id = {_p}",
+        (quantity, product_id)
+    )
+    cursor.execute(
+        f"INSERT INTO inventory_logs (product_id, change, reason) VALUES ({_p},{_p},{_p})",
+        (product_id, -quantity, "sale")
+    )
     conn.commit()
     conn.close()
 
@@ -86,11 +110,11 @@ def update_product(product_id, name, category, subcategory, brand, size,
                    description, cost, price):
     conn   = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(f"""
         UPDATE products
-        SET name=?, category=?, subcategory=?, brand=?, size=?, description=?,
-            cost_price=?, selling_price=?
-        WHERE id=?
+        SET name={_p}, category={_p}, subcategory={_p}, brand={_p},
+            size={_p}, description={_p}, cost_price={_p}, selling_price={_p}
+        WHERE id={_p}
     """, (name, category, subcategory, brand, size, description, cost, price, product_id))
     conn.commit()
     conn.close()
@@ -99,7 +123,7 @@ def update_product(product_id, name, category, subcategory, brand, size,
 def delete_product(product_id):
     conn   = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM products WHERE id=?", (product_id,))
+    cursor.execute(f"DELETE FROM products WHERE id={_p}", (product_id,))
     conn.commit()
     conn.close()
 

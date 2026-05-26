@@ -1,17 +1,20 @@
-import sys
-import os
+"""
+pos.py — Point of Sale: process and delete sales.
+Works on both SQLite and PostgreSQL.
+
+KEY CHANGES vs old version:
+  - _p placeholder, lastrowid vs lastval() for new sale ID
+"""
+import sys, os
 from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from db_config import DB_PATH, get_connection
+from db_config import get_connection, USE_POSTGRES
+
+_p = "%s" if USE_POSTGRES else "?"
 
 
 def process_sale(cart_items, payment_method="cash", customer_name="Walk-in",
                  discount=0.0, amount_paid=None):
-    """
-    cart_items    = [{"product_id": 1, "quantity": 2}, ...]
-    discount      = amount discounted (KES)
-    amount_paid   = actual amount received from customer
-    """
     conn   = get_connection()
     cursor = conn.cursor()
 
@@ -19,9 +22,9 @@ def process_sale(cart_items, payment_method="cash", customer_name="Walk-in",
     detailed_items = []
 
     for item in cart_items:
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT name, selling_price, quantity_in_stock, category
-            FROM products WHERE id=?
+            FROM products WHERE id={_p}
         """, (item["product_id"],))
         product = cursor.fetchone()
 
@@ -39,7 +42,6 @@ def process_sale(cart_items, payment_method="cash", customer_name="Walk-in",
 
         item_total    = price * item["quantity"]
         total_amount += item_total
-
         detailed_items.append({
             "product_id": item["product_id"],
             "name":       name,
@@ -53,29 +55,33 @@ def process_sale(cart_items, payment_method="cash", customer_name="Walk-in",
     if amount_paid is None:
         amount_paid = final_amount
 
-    cursor.execute("""
+    cursor.execute(f"""
         INSERT INTO sales
             (total_amount, payment_method, created_at, customer_name, discount, amount_paid)
-        VALUES (?, ?, ?, ?, ?, ?)
+        VALUES ({_p},{_p},{_p},{_p},{_p},{_p})
     """, (final_amount, payment_method, datetime.now(), customer_name, discount, amount_paid))
 
-    sale_id = cursor.lastrowid
+    if USE_POSTGRES:
+        cursor.execute("SELECT lastval()")
+        sale_id = cursor.fetchone()[0]
+    else:
+        sale_id = cursor.lastrowid
 
     for item in detailed_items:
-        cursor.execute("""
+        cursor.execute(f"""
             INSERT INTO sale_items (sale_id, product_id, quantity, price)
-            VALUES (?, ?, ?, ?)
+            VALUES ({_p},{_p},{_p},{_p})
         """, (sale_id, item["product_id"], item["quantity"], item["price"]))
 
         if item["category"] != "service":
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE products
-                SET quantity_in_stock = quantity_in_stock - ?
-                WHERE id=?
+                SET quantity_in_stock = quantity_in_stock - {_p}
+                WHERE id={_p}
             """, (item["quantity"], item["product_id"]))
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO inventory_logs (product_id, change, reason)
-                VALUES (?, ?, ?)
+                VALUES ({_p},{_p},{_p})
             """, (item["product_id"], -item["quantity"], "sale"))
 
     conn.commit()
@@ -88,24 +94,24 @@ def delete_sale(sale_id):
     conn   = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("SELECT product_id, quantity FROM sale_items WHERE sale_id=?", (sale_id,))
+    cursor.execute(f"SELECT product_id, quantity FROM sale_items WHERE sale_id={_p}", (sale_id,))
     items = cursor.fetchall()
 
     for product_id, quantity in items:
-        cursor.execute("SELECT category FROM products WHERE id=?", (product_id,))
+        cursor.execute(f"SELECT category FROM products WHERE id={_p}", (product_id,))
         row = cursor.fetchone()
         if row and row[0] != "service":
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE products
-                SET quantity_in_stock = quantity_in_stock + ?
-                WHERE id=?
+                SET quantity_in_stock = quantity_in_stock + {_p}
+                WHERE id={_p}
             """, (quantity, product_id))
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO inventory_logs (product_id, change, reason)
-                VALUES (?, ?, ?)
+                VALUES ({_p},{_p},{_p})
             """, (product_id, quantity, "sale reversed"))
 
-    cursor.execute("DELETE FROM sale_items WHERE sale_id=?", (sale_id,))
-    cursor.execute("DELETE FROM sales WHERE id=?", (sale_id,))
+    cursor.execute(f"DELETE FROM sale_items WHERE sale_id={_p}", (sale_id,))
+    cursor.execute(f"DELETE FROM sales WHERE id={_p}", (sale_id,))
     conn.commit()
     conn.close()

@@ -1,14 +1,47 @@
-# render.yaml — Render deployment configuration
-# This is the "Infrastructure as Code" file for Render.
-# Render reads this automatically when you connect your repo.
+# render.yaml — Render deployment configuration for Baiskeli Centre POS
 #
-# IMPORTANT ABOUT RENDER FREE TIER + PERSISTENT DISK:
-# Render's free web service tier does NOT include a persistent disk.
-# Persistent disks are a paid add-on ($0.25/GB/month, minimum ~$1/month).
-# You need to upgrade to at least the "Starter" paid plan to attach a disk.
+# ═══════════════════════════════════════════════════════════════
+# HOW DATA IS STORED ON RENDER FREE TIER
+# ═══════════════════════════════════════════════════════════════
+# Render's free web service has NO persistent disk.
+# But it DOES have a free PostgreSQL database (separate service).
 #
-# If you want 100% free on Render: your data WILL be lost on restarts.
-# For a real shop: pay the $1/month disk OR use Railway (cheaper overall).
+# The app auto-detects which database to use:
+#   DATABASE_URL set → PostgreSQL (data survives restarts forever)
+#   DATABASE_URL not set → SQLite (data LOST on every restart)
+#
+# ═══════════════════════════════════════════════════════════════
+# ONE-TIME SETUP (do this once in the Render dashboard)
+# ═══════════════════════════════════════════════════════════════
+# Step 1: Create the free PostgreSQL database
+#   → Render dashboard → New → PostgreSQL
+#   → Name: baiskeli-db
+#   → Plan: Free
+#   → Click "Create Database"
+#   → Wait for it to say "Available"
+#
+# Step 2: Copy the Internal Database URL
+#   → Click on your new baiskeli-db service
+#   → Scroll to "Connections"
+#   → Copy the "Internal Database URL"
+#     (looks like: postgresql://user:pass@dpg-xxx/baiskeli_db)
+#
+# Step 3: Add it to your web service
+#   → Go to your web service (baiskeli-pos)
+#   → Click "Environment" in the left menu
+#   → Click "Add Environment Variable"
+#   → Key:   DATABASE_URL
+#   → Value: (paste the Internal Database URL)
+#   → Click "Save Changes"
+#
+# Step 4: Redeploy
+#   → Click "Manual Deploy" → "Deploy latest commit"
+#   → App will start, connect to Postgres, create tables, seed users
+#   → Data now survives forever ✅
+#
+# The free Postgres DB lasts 1 year. After expiry, create a new one
+# and update DATABASE_URL. Your app code doesn't change at all.
+# ═══════════════════════════════════════════════════════════════
 
 services:
   - type: web
@@ -17,14 +50,11 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0 --server.headless true
     envVars:
-      - key: BAISKELI_DB_PATH
-        value: /data/baiskeli.db   # points to persistent disk mount
       - key: PYTHON_VERSION
         value: "3.12"
-
-    # Persistent disk — attach so data survives restarts
-    # This requires a paid instance type (Starter or above)
-    disk:
-      name: baiskeli-data
-      mountPath: /data
-      sizeGB: 1      # 1 GB = $0.25/month, plenty for SQLite
+      - key: RENDER
+        value: "true"
+      - key: COOKIE_SECRET
+        generateValue: true   # Render auto-generates a random secret — no action needed
+      # DATABASE_URL must be added manually from your Postgres service (see steps above)
+      # Render cannot auto-link it in render.yaml on the free tier
